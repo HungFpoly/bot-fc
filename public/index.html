@@ -1,0 +1,811 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>BILAC Multi-Bot</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: 'Segoe UI', system-ui, sans-serif; background: #0a0a1a; color: #e0e0e0; min-height: 100vh; }
+
+    /* HEADER */
+    .header {
+      background: linear-gradient(135deg, #12122a, #1e1050);
+      padding: 12px 24px;
+      border-bottom: 2px solid #5b21b6;
+      display: flex; align-items: center; gap: 16px;
+    }
+    .header h1 { font-size: 1.2rem; color: #a78bfa; white-space: nowrap; }
+    .bust-feed {
+      flex: 1; overflow: hidden; height: 22px;
+      background: rgba(251,191,36,0.08); border-radius: 6px; padding: 0 10px;
+      display: flex; align-items: center;
+      position: relative;
+    }
+    .bust-feed span { font-size: 0.75rem; color: #fbbf24; white-space: nowrap; }
+    .bust-feed .marquee-inner {
+      display: inline-block;
+      animation: marquee 20s linear infinite;
+      padding-left: 100%;
+    }
+    .bust-feed:hover .marquee-inner { animation-play-state: paused; }
+    @keyframes marquee {
+      0%   { transform: translateX(0); }
+      100% { transform: translateX(-100%); }
+    }
+    .header-stats { display: flex; gap: 16px; white-space: nowrap; font-size: 0.82rem; }
+    .header-stats span { color: #94a3b8; }
+    .header-stats strong { color: #22d3ee; }
+
+    /* LAYOUT */
+    .layout { display: flex; height: calc(100vh - 58px); }
+    .left { width: 300px; min-width: 280px; border-right: 1px solid #222; overflow-y: auto; display: flex; flex-direction: column; }
+    .right { flex: 1; overflow-y: auto; padding: 16px; }
+
+    /* PANELS */
+    .panel { padding: 14px 16px; border-bottom: 1px solid #1a1a2e; }
+    .panel h2 { font-size: 0.85rem; color: #7c3aed; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 10px; }
+
+    label { font-size: 0.72rem; color: #64748b; display: block; margin-bottom: 3px; }
+    input[type=number] {
+      background: #0f0f23; border: 1px solid #2d2d4e; color: #e0e0e0;
+      padding: 6px 10px; border-radius: 6px; width: 100%; font-size: 0.82rem; margin-bottom: 8px;
+    }
+    textarea {
+      width: 100%; background: #0f0f23; border: 1px solid #2d2d4e; color: #e0e0e0;
+      padding: 8px 10px; border-radius: 6px; font-family: 'Consolas', monospace;
+      font-size: 0.78rem; resize: vertical; min-height: 100px;
+    }
+    textarea::placeholder { color: #3d3d5c; }
+
+    .btn { padding: 7px 14px; border: none; border-radius: 6px; cursor: pointer; font-weight: 600; font-size: 0.78rem; transition: all 0.15s; }
+    .btn-purple { background: #6d28d9; color: #fff; } .btn-purple:hover { background: #7c3aed; }
+    .btn-red { background: #b91c1c; color: #fff; } .btn-red:hover { background: #dc2626; }
+    .btn-green { background: #065f46; color: #fff; } .btn-green:hover { background: #059669; }
+    .btn-sm { padding: 4px 10px; font-size: 0.7rem; }
+    .btn-row { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
+
+    .preview-item { font-size: 0.72rem; padding: 2px 0; }
+
+    /* BOT CARDS */
+    .bots-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); gap: 14px; }
+
+    .bot-card {
+      background: #12122a; border-radius: 10px; border: 1px solid #1e1e3f;
+      overflow: hidden; transition: border-color 0.2s;
+    }
+    .bot-card.running { border-color: #0e7490; }
+    .bot-card.stopped { border-color: #7f1d1d; opacity: 0.75; }
+
+    .bot-card-header {
+      padding: 10px 14px; display: flex; justify-content: space-between; align-items: center;
+      background: #0f0f23; border-bottom: 1px solid #1e1e3f;
+    }
+    .bot-name { font-weight: 700; font-size: 0.88rem; color: #c4b5fd; }
+    .bot-badge { font-size: 0.65rem; padding: 2px 8px; border-radius: 20px; font-weight: 700; }
+    .bot-badge.on { background: #064e3b; color: #34d399; }
+    .bot-badge.off { background: #450a0a; color: #f87171; }
+
+    /* Stats row */
+    .bot-stats { display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; border-bottom: 1px solid #1e1e3f; }
+    .bot-stat { padding: 8px 10px; border-right: 1px solid #1e1e3f; }
+    .bot-stat:last-child { border-right: none; }
+    .stat-label { font-size: 0.6rem; color: #475569; text-transform: uppercase; letter-spacing: 0.3px; }
+    .stat-value { font-size: 0.88rem; font-weight: 700; color: #38bdf8; margin-top: 1px; }
+    .stat-value.gold { color: #fbbf24; }
+
+    /* Rewards */
+    .bot-rewards { padding: 8px 14px; border-bottom: 1px solid #1e1e3f; min-height: 36px; }
+    .rewards-title { font-size: 0.62rem; color: #475569; text-transform: uppercase; margin-bottom: 4px; }
+    .reward-entry { font-size: 0.7rem; color: #94a3b8; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-bottom: 1px; }
+    .reward-entry .rt { color: #4b5563; margin-right: 4px; }
+    .no-reward { font-size: 0.7rem; color: #2d2d4e; }
+
+    /* Log */
+    .bot-log { padding: 6px 14px; font-family: 'Consolas', monospace; font-size: 0.7rem; color: #64748b; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; border-bottom: 1px solid #1e1e3f; background: #0a0a15; }
+
+    /* Actions */
+    .bot-actions { padding: 8px 14px; display: flex; gap: 6px; }
+
+    /* Empty */
+    .empty { text-align: center; padding: 60px 20px; color: #2d2d4e; }
+    .empty h3 { font-size: 1rem; margin-bottom: 6px; }
+
+    /* Modal */
+    .modal-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.8); z-index: 999; justify-content: center; align-items: center; }
+    .modal-overlay.open { display: flex; }
+    .modal { background: #12122a; border-radius: 12px; padding: 20px; width: 90%; max-width: 720px; max-height: 82vh; display: flex; flex-direction: column; border: 1px solid #2d2d4e; }
+    .modal h3 { color: #a78bfa; margin-bottom: 10px; font-size: 0.95rem; }
+    .modal-body { flex: 1; overflow-y: auto; background: #0a0a15; border-radius: 6px; padding: 10px; font-family: 'Consolas', monospace; font-size: 0.72rem; line-height: 1.6; color: #64748b; white-space: pre-wrap; }
+    .modal-footer { margin-top: 10px; display: flex; justify-content: flex-end; }
+
+    @keyframes jackpotPop {
+      0%   { transform: scale(0.3); opacity: 0; }
+      70%  { transform: scale(1.15); opacity: 1; }
+      100% { transform: scale(1); }
+    }
+
+    /* Toast Notification */
+    .toast-container { position: fixed; top: 80px; right: 20px; z-index: 1000; display: flex; flex-direction: column; gap: 10px; pointer-events: none; }
+    .toast {
+      background: linear-gradient(135deg, #7c3aed, #a78bfa);
+      color: white; padding: 16px 20px; border-radius: 12px;
+      box-shadow: 0 6px 24px rgba(124,58,237,0.5);
+      font-size: 0.88rem; font-weight: 600;
+      animation: toastSlideIn 0.4s ease-out;
+      pointer-events: auto; cursor: pointer;
+      max-width: 380px;
+      border: 2px solid rgba(255,255,255,0.2);
+    }
+    .toast.mini-bust { 
+      background: linear-gradient(135deg, #f59e0b, #fbbf24); 
+      box-shadow: 0 6px 24px rgba(245,158,11,0.5);
+      border-color: rgba(255,255,255,0.3);
+    }
+    .toast-title { font-size: 1rem; margin-bottom: 6px; font-weight: 700; }
+    .toast-body { font-size: 0.82rem; font-weight: 400; opacity: 0.95; line-height: 1.5; }
+    .toast-body strong { font-weight: 700; color: #fff; }
+    @keyframes toastSlideIn {
+      from { transform: translateX(400px); opacity: 0; }
+      to { transform: translateX(0); opacity: 1; }
+    }
+    @keyframes toastSlideOut {
+      from { transform: translateX(0); opacity: 1; }
+      to { transform: translateX(400px); opacity: 0; }
+    }
+    .toast.hiding { animation: toastSlideOut 0.3s ease-in forwards; }
+
+    /* Mini Strategy Badge */
+    .mini-strategy-badge {
+      display: inline-block;
+      background: linear-gradient(135deg, #f59e0b, #fbbf24);
+      color: #000;
+      font-size: 0.68rem;
+      font-weight: 700;
+      padding: 3px 8px;
+      border-radius: 4px;
+      margin-left: 6px;
+      animation: pulse 2s ease-in-out infinite;
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.7; }
+    }
+  </style>
+</head>
+<body>
+
+<div class="header">
+  <h1>⚽ BILAC Bot</h1>
+  <div class="bust-feed" id="bust-feed"><span id="bust-text" style="color:#4b5563">Chưa có sự kiện nổ hũ...</span></div>
+  <div class="header-stats">
+    <span>🎰 <strong id="hd-jackpot">---</strong> FC</span>
+    <span>🟢 <strong id="hd-running">0</strong></span>
+    <span>🎯 Spin: <strong id="hd-spins">0</strong></span>
+    <span>🏆 Win: <strong id="hd-wins">0</strong></span>
+  </div>
+</div>
+
+<div class="layout">
+  <!-- LEFT: Config + Add acc -->
+  <div class="left">
+    <div class="panel">
+      <h2>⚙️ Cấu hình</h2>
+      <label>Min Jackpot (FC)</label>
+      <input type="number" id="cfg-min" value="14000">
+      <label>Max Jackpot (FC) — 0 = không giới hạn</label>
+      <input type="number" id="cfg-max" value="16500" min="0">
+      <label>Spin / Turn (số lượt gọi API)</label>
+      <input type="number" id="cfg-spins" value="3" min="1" max="50">
+      <div class="btn-row">
+        <button class="btn btn-purple btn-sm" id="btn-apply" onclick="updateConfig()">Áp dụng</button>
+        <button class="btn btn-red btn-sm" onclick="stopAll()">⏹ Dừng tất cả</button>
+      </div>
+    </div>
+
+    <div class="panel" style="flex:1">
+      <h2>➕ Thêm tài khoản</h2>
+      <p style="font-size:0.72rem;color:#475569;margin-bottom:8px">Mỗi dòng: <code style="color:#7c3aed">username|password</code></p>
+      <textarea id="login-input" placeholder="pentakkz7219|matkhau123&#10;acc2|matkhau456"></textarea>
+      <div id="login-preview" style="margin-top:6px;display:none"></div>
+      <div class="btn-row">
+        <button class="btn btn-purple" onclick="loginAndRun()" id="btn-login">🔑 Đăng nhập & Chạy</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- RIGHT: Bot cards -->
+  <div class="right">
+    <div id="bots-container" class="bots-grid">
+      <div class="empty"><h3>Chưa có bot nào</h3><p style="font-size:0.8rem">Nhập tài khoản bên trái</p></div>
+    </div>
+  </div>
+</div>
+
+<!-- Fireworks Canvas -->
+<canvas id="fireworks-canvas" style="position:fixed;top:0;left:0;width:100%;height:100%;pointer-events:none;z-index:9998;display:none"></canvas>
+
+<!-- Toast Container -->
+<div class="toast-container" id="toast-container"></div>
+
+<!-- Jackpot Win Overlay -->
+<div id="jackpot-overlay" style="display:none;position:fixed;inset:0;z-index:9999;justify-content:center;align-items:center;pointer-events:none;">
+  <div style="text-align:center;animation:jackpotPop 0.5s ease-out">
+    <div style="font-size:5rem;margin-bottom:10px">🏆</div>
+    <div style="font-size:2.5rem;font-weight:900;color:#fbbf24;text-shadow:0 0 40px #f59e0b,0 0 80px #f59e0b" id="jackpot-win-text">ĂN HŨ JACKPOT!</div>
+    <div style="font-size:1.2rem;color:#e0e0e0;margin-top:8px" id="jackpot-win-acc"></div>
+  </div>
+</div>
+
+<!-- Log Modal -->
+<div class="modal-overlay" id="modal">
+  <div class="modal">
+    <h3 id="modal-title">Log</h3>
+    <div class="modal-body" id="modal-body"></div>
+    <div class="modal-footer">
+      <button class="btn btn-purple btn-sm" onclick="closeModal()">Đóng</button>
+    </div>
+  </div>
+</div>
+
+<script>
+  let botsData = [];
+
+  function escapeHtml(value) {
+    return String(value ?? "").replace(/[&<>'"]/g, ch => ({
+      "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;"
+    })[ch]);
+  }
+
+  // ── Helpers ──────────────────────────────────
+  async function fetchBots() {
+    try { botsData = await (await fetch("/api/bots")).json(); scheduleRender(); } catch(_) {}
+  }
+
+  // ── Debounce render ───────────────────────────
+  let _renderTimer = null;
+  function scheduleRender() {
+    if (_renderTimer) return; // Đã schedule rồi
+    _renderTimer = requestAnimationFrame(() => {
+      _renderTimer = null;
+      renderBots();
+      updateHeader();
+    });
+  }
+
+  function updateHeader() {
+    const running = botsData.filter(b=>b.running).length;
+    const spins   = botsData.reduce((s,b)=>s+b.totalSpins,0);
+    const wins    = botsData.reduce((s,b)=>s+b.jackpotWins,0);
+    document.getElementById("hd-running").textContent = running;
+    document.getElementById("hd-spins").textContent   = spins;
+    document.getElementById("hd-wins").textContent    = wins;
+  }
+
+  // ── Selective DOM update ─────────────────────
+  function buildBotCardHtml(bot) {
+    const rewardsHtml = bot.lastRewards && bot.lastRewards.length
+      ? bot.lastRewards.slice(0,3).map(r =>
+          `<div class="reward-entry"><span class="rt">${escapeHtml(r.time)}</span>${escapeHtml(r.items)}</div>`
+        ).join("")
+      : `<div class="no-reward">Chưa có phần thưởng</div>`;
+
+    const waitLabel = bot.waitingNextTurn
+      ? `<span style="color:#f59e0b;font-size:0.65rem">⏸ Chờ turn</span>`
+      : `<span style="color:#34d399;font-size:0.65rem">▶ Sẵn sàng</span>`;
+
+    return `
+      <div class="bot-card-header">
+        <div>
+          <div class="bot-name">${escapeHtml(bot.label)}${bot.accountName?' <span style="color:#64748b;font-weight:400">('+escapeHtml(bot.accountName)+')</span>':''}</div>
+        </div>
+        <div style="display:flex;align-items:center;gap:6px">
+          ${waitLabel}
+          <span class="bot-badge ${bot.running?'on':'off'}">${bot.running?'● Chạy':'○ Dừng'}</span>
+        </div>
+      </div>
+
+      <div style="font-size:0.65rem;color:#64748b;margin:-2px 0 6px;line-height:1.4">
+        🎯 Vùng bắn: <strong style="color:#a78bfa">${escapeHtml(bot.zoneLabel||'---')}</strong> · ${bot.config?bot.config.SPINS_PER_TURN:'?'} lần gọi/turn · spinNum=${bot.config?bot.config.SPIN_NUM:'?'}
+      </div>
+
+      <div class="bot-stats">
+        <div class="bot-stat">
+          <div class="stat-label">Hũ</div>
+          <div class="stat-value jackpot-value">${bot.jackpot?bot.jackpot.toLocaleString():'---'} <span style="font-size:0.6rem;font-weight:400">FC</span></div>
+        </div>
+        <div class="bot-stat">
+          <div class="stat-label">Ví</div>
+          <div class="stat-value">${bot.fc!==null?bot.fc.toLocaleString():'---'} <span style="font-size:0.6rem;font-weight:400">FC</span></div>
+        </div>
+        <div class="bot-stat">
+          <div class="stat-label">Spin</div>
+          <div class="stat-value gold">${bot.totalSpins}</div>
+        </div>
+        <div class="bot-stat">
+          <div class="stat-label">Jackpot</div>
+          <div class="stat-value gold">${bot.jackpotWins}</div>
+        </div>
+      </div>
+
+      <div class="bot-rewards">
+        <div class="rewards-title">🎁 Phần thưởng gần nhất</div>
+        ${rewardsHtml}
+      </div>
+
+      <div class="bot-log">${escapeHtml(bot.lastLog||'...')}</div>
+
+      <div class="bot-actions">
+        ${bot.running
+          ? `<button class="btn btn-red btn-sm" onclick="stopBot('${bot.id}')">⏹ Dừng</button>`
+          : `<button class="btn btn-green btn-sm" onclick="startBot('${bot.id}')">▶ Chạy</button>`}
+        <button class="btn btn-purple btn-sm" onclick="openLogs('${bot.id}')">📋 Logs</button>
+        <button class="btn btn-red btn-sm" onclick="deleteBot('${bot.id}')">🗑️</button>
+      </div>`;
+  }
+
+  function renderBots() {
+    const c = document.getElementById("bots-container");
+    if (!botsData.length) {
+      c.innerHTML = `<div class="empty"><h3>Chưa có bot nào</h3><p>Nhập tài khoản bên trái</p></div>`;
+      return;
+    }
+
+    // Kiểm tra card nào đã có trong DOM
+    const existingCards = c.querySelectorAll(".bot-card[data-bot-id]");
+    const existingIds = new Set();
+    existingCards.forEach(el => existingIds.add(el.dataset.botId));
+
+    const currentIds = new Set(botsData.map(b => b.id));
+
+    // Xóa card không còn trong data
+    existingCards.forEach(el => {
+      if (!currentIds.has(el.dataset.botId)) el.remove();
+    });
+
+    // Xóa placeholder empty nếu có
+    const emptyEl = c.querySelector(".empty");
+    if (emptyEl) emptyEl.remove();
+
+    // Update hoặc tạo mới từng bot card
+    botsData.forEach(bot => {
+      let card = c.querySelector(`[data-bot-id="${bot.id}"]`);
+      if (card) {
+        // Update nội dung card hiện có
+        card.className = `bot-card ${bot.running?'running':'stopped'}`;
+        card.innerHTML = buildBotCardHtml(bot);
+      } else {
+        // Tạo card mới
+        card = document.createElement("div");
+        card.className = `bot-card ${bot.running?'running':'stopped'}`;
+        card.dataset.botId = bot.id;
+        card.innerHTML = buildBotCardHtml(bot);
+        c.appendChild(card);
+      }
+    });
+  }
+
+  // ── Actions ──────────────────────────────────
+  async function stopBot(id)   { await fetch(`/api/bots/${id}/stop`,{method:"POST"}); fetchBots(); }
+  async function startBot(id)  { await fetch(`/api/bots/${id}/start`,{method:"POST"}); fetchBots(); }
+  async function stopAll()     { await fetch("/api/bots/stop-all",{method:"POST"}); fetchBots(); }
+  async function deleteBot(id) {
+    if (!confirm("Xóa bot này?")) return;
+    await fetch(`/api/bots/${id}`,{method:"DELETE"}); fetchBots();
+  }
+  async function updateConfig() {
+    const min = parseInt(document.getElementById("cfg-min").value);
+    const max = parseInt(document.getElementById("cfg-max").value)||0;
+    const spt = parseInt(document.getElementById("cfg-spins").value);
+    if (!min || min < 1) return alert("Min Jackpot không hợp lệ!");
+    if (!spt || spt < 1) return alert("Spin / Turn không hợp lệ!");
+    if (max > 0 && max < min) return alert("Max Jackpot phải lớn hơn Min Jackpot!");
+
+    const btn = document.getElementById("btn-apply");
+    const old = btn.textContent;
+    btn.disabled = true; btn.textContent = "⏳ Đang áp dụng...";
+    try {
+      const res = await fetch("/api/config",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({minJackpot:min,maxJackpot:max,spinsPerTurn:spt})});
+      const data = await res.json();
+      if (!res.ok || !data.success) throw new Error(data.error||"Lỗi không rõ");
+      btn.textContent = data.updated > 0 ? `✅ ${data.updated} bot` : "⚠️ Chưa có bot";
+      fetchBots();
+    } catch(e) {
+      btn.textContent = "❌ Lỗi";
+      alert("Không áp dụng được config: "+e.message);
+    } finally {
+      setTimeout(()=>{ btn.disabled=false; btn.textContent=old; }, 1500);
+    }
+  }
+
+  // ── Login ──────────────────────────────────
+  document.getElementById("login-input").addEventListener("input", () => {
+    const raw = document.getElementById("login-input").value.trim();
+    const box = document.getElementById("login-preview");
+    if (!raw) { box.style.display="none"; return; }
+    const lines = raw.split("\n").filter(l=>l.trim());
+    box.innerHTML = lines.map((line,i)=>{
+      const [u,...passwordParts] = line.split("|");
+      const p = passwordParts.join("|");
+      const ok = u&&u.trim()&&p&&p.trim();
+      return `<div class="preview-item" style="color:${ok?'#34d399':'#f87171'}">Acc #${i+1}: ${escapeHtml(u?u.trim():'?')} ${ok?'✅':'⚠️'}</div>`;
+    }).join("");
+    box.style.display="block";
+  });
+
+  async function loginAndRun() {
+    const raw = document.getElementById("login-input").value.trim();
+    if (!raw) return alert("Nhập username|password!");
+    const accounts = raw.split("\n").filter(l=>l.trim()).map((line,i)=>{
+      const [u,...passwordParts] = line.split("|");
+      const p = passwordParts.join("|");
+      return {label:`Acc #${i+1}`,username:u?u.trim():"",password:p?p.trim():""};
+    }).filter(a=>a.username&&a.password);
+    if (!accounts.length) return alert("Format: username|password");
+
+    const min = parseInt(document.getElementById("cfg-min").value)||14000;
+    const max = parseInt(document.getElementById("cfg-max").value)||0;
+    const spt = parseInt(document.getElementById("cfg-spins").value)||3;
+    if (max > 0 && max < min) return alert("Max Jackpot phải lớn hơn Min Jackpot!");
+    const btn = document.getElementById("btn-login");
+    btn.disabled=true; btn.textContent="⏳ Đang đăng nhập...";
+
+    try {
+      const res = await fetch("/api/login-and-run",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({accounts,config:{minJackpot:min,maxJackpot:max,spinsPerTurn:spt}})});
+      const data = await res.json();
+      if (data.success) {
+        const failed = data.results.filter(r=>r.status==="failed");
+        if (failed.length) alert(`${data.started}/${data.total} OK\nLỗi:\n${failed.map(f=>`${f.username}: ${f.error}`).join("\n")}`);
+        document.getElementById("login-input").value="";
+        document.getElementById("login-preview").style.display="none";
+        fetchBots();
+      } else alert("Lỗi: "+(data.error||"Unknown"));
+    } catch(e){ alert("Lỗi: "+e.message); }
+    finally { btn.disabled=false; btn.textContent="🔑 Đăng nhập & Chạy"; }
+  }
+
+  // ── Logs modal ──────────────────────────────
+  let activeLogBotId = null;
+  async function openLogs(id) {
+    activeLogBotId = id;
+    const bot = botsData.find(item => item.id === id);
+    document.getElementById("modal-title").textContent = `📋 ${bot?.label || id}`;
+    const data = await (await fetch(`/api/bots/${id}/logs`)).json();
+    document.getElementById("modal-body").textContent = (data.logs||[]).join("\n");
+    document.getElementById("modal").classList.add("open");
+    const body = document.getElementById("modal-body");
+    body.scrollTop = body.scrollHeight;
+  }
+  function closeModal() {
+    activeLogBotId = null;
+    document.getElementById("modal").classList.remove("open");
+  }
+
+  // ── SSE real-time ────────────────────────────
+  const bustEvents = [];
+  function addBust({ from, to, time, winner, prize, type = "grand" }) {
+    bustEvents.unshift({from,to,time,winner,prize,type});
+    if (bustEvents.length>5) bustEvents.pop();
+    const html = bustEvents.map(e=>{
+      const isMini = e.type === "mini";
+      const who = e.winner ? `<b style="color:${isMini?'#fbbf24':'#f87171'}">${escapeHtml(e.winner)}</b> ăn ${isMini?'Mini Jackpot':'hũ'}` : `Hũ nổ`;
+      const amount = e.prize || (Number(e.from || 0).toLocaleString() + ' FC');
+      return `<span style="margin-right:24px">${isMini?'🎊':'💥'} [${escapeHtml(e.time)}] ${who} ${escapeHtml(amount)}</span>`;
+    }).join("");
+    document.getElementById("bust-text").innerHTML = `<span class="marquee-inner">${html}</span>`;
+  }
+
+  // ── SSE với auto-reconnect ────────────────────
+  let sse;
+  let sseRetryTimeout = null;
+
+  function connectSSE() {
+    if (sse) { sse.close(); sse = null; }
+    sse = new EventSource("/api/stream");
+
+    sse.onmessage = (e) => {
+      const {type,data} = JSON.parse(e.data);
+
+      if (type === "init") {
+        botsData = data.bots||[];
+        const jp = data.jackpot||0;
+        if (jp>0) { document.getElementById("hd-jackpot").textContent=jp.toLocaleString(); botsData.forEach(b=>b.jackpot=jp); }
+        scheduleRender();
+      }
+      else if (type === "jackpot") {
+        document.getElementById("hd-jackpot").textContent = data.value.toLocaleString();
+        botsData.forEach(b=>{
+          b.jackpot=data.value;
+          const el=document.querySelector(`[data-bot-id="${b.id}"] .jackpot-value`);
+          if(el) el.innerHTML=`${data.value.toLocaleString()} <span style="font-size:0.6rem;font-weight:400">FC</span>`;
+        });
+      }
+      else if (type === "status") {
+        const idx=botsData.findIndex(b=>b.id===data.id);
+        if(idx>=0){data.jackpot=botsData[idx].jackpot||data.jackpot;botsData[idx]=data;}else botsData.push(data);
+        scheduleRender();
+      }
+      else if (type === "snapshot") {
+        (data.bots||[]).forEach(bot=>{
+          const idx=botsData.findIndex(b=>b.id===bot.id);
+          if(idx>=0){bot.jackpot=botsData[idx].jackpot||bot.jackpot;botsData[idx]=bot;}else botsData.push(bot);
+        });
+        scheduleRender();
+      }
+      else if (type === "log") {
+        const idx=botsData.findIndex(b=>b.id===data.id);
+        if(idx>=0){
+          botsData[idx].lastLog=data.log;
+          const el=document.querySelector(`[data-bot-id="${data.id}"] .bot-log`);
+          if(el) el.textContent=data.log;
+        }
+        if (activeLogBotId === data.id) {
+          const body = document.getElementById("modal-body");
+          const lines = body.textContent ? body.textContent.split("\n") : [];
+          lines.push(data.log);
+          body.textContent = lines.slice(-100).join("\n");
+          body.scrollTop = body.scrollHeight;
+        }
+      }
+      else if (type === "bust") { addBust(data); }
+      else if (type === "mini_bust") { addBust({...data, type:"mini"}); }
+      else if (type === "jackpot_win") {
+        const isGrand = data.type === "grand";
+        const label = `${data.label}${data.accountName?' ('+data.accountName+')':''}`;
+        if (isGrand) {
+          showJackpotWin(label, "🎉 ĂN HŨ JACKPOT! 🎉");
+        } else {
+          showJackpotWin(label, "🎊 TRÚNG MINI JACKPOT!");
+        }
+      }
+    };
+
+    sse.onerror = () => {
+      sse.close();
+      sse = null;
+      // Auto-reconnect sau 3s
+      if (sseRetryTimeout) clearTimeout(sseRetryTimeout);
+      sseRetryTimeout = setTimeout(() => { connectSSE(); fetchBots(); }, 3000);
+    };
+  }
+
+  connectSSE();
+  fetchBots();
+
+  // ── Fireworks ────────────────────────────────
+  const fwCanvas = document.getElementById("fireworks-canvas");
+  const fwCtx = fwCanvas.getContext("2d");
+  let fwParticles = [];
+  let fwAnimFrame = null;
+  let fwRunning = false;
+
+  function resizeCanvas() {
+    fwCanvas.width = window.innerWidth;
+    fwCanvas.height = window.innerHeight;
+  }
+  window.addEventListener("resize", resizeCanvas);
+  resizeCanvas();
+
+  function randomColor() {
+    const colors = ["#fbbf24","#f87171","#34d399","#60a5fa","#a78bfa","#fb7185","#facc15","#4ade80","#38bdf8","#e879f9"];
+    return colors[Math.floor(Math.random()*colors.length)];
+  }
+
+  function spawnFirework() {
+    const x = Math.random() * fwCanvas.width;
+    const y = Math.random() * fwCanvas.height * 0.6;
+    const count = 60 + Math.floor(Math.random()*40);
+    for (let i=0; i<count; i++) {
+      const angle = (Math.PI*2/count)*i + Math.random()*0.3;
+      const speed = 3 + Math.random()*6;
+      fwParticles.push({
+        x, y,
+        vx: Math.cos(angle)*speed,
+        vy: Math.sin(angle)*speed,
+        alpha: 1,
+        size: 2 + Math.random()*3,
+        color: randomColor(),
+        gravity: 0.12,
+        decay: 0.012 + Math.random()*0.01,
+      });
+    }
+  }
+
+  function animateFireworks() {
+    fwCtx.fillStyle = "rgba(0,0,0,0.15)";
+    fwCtx.fillRect(0,0,fwCanvas.width,fwCanvas.height);
+
+    fwParticles.forEach(p => {
+      p.x  += p.vx;
+      p.y  += p.vy;
+      p.vy += p.gravity;
+      p.vx *= 0.98;
+      p.alpha -= p.decay;
+      fwCtx.globalAlpha = Math.max(0, p.alpha);
+      fwCtx.fillStyle = p.color;
+      fwCtx.beginPath();
+      fwCtx.arc(p.x, p.y, p.size, 0, Math.PI*2);
+      fwCtx.fill();
+    });
+
+    fwCtx.globalAlpha = 1;
+    fwParticles = fwParticles.filter(p => p.alpha > 0);
+    fwAnimFrame = requestAnimationFrame(animateFireworks);
+  }
+
+  function startFireworks(durationMs = 8000) {
+    fwCanvas.style.display = "block";
+    fwRunning = true;
+    fwParticles = [];
+    fwCtx.clearRect(0,0,fwCanvas.width,fwCanvas.height);
+    if (fwAnimFrame) cancelAnimationFrame(fwAnimFrame);
+    animateFireworks();
+
+    // Spawn liên tục trong durationMs
+    let spawnCount = 0;
+    const maxSpawns = Math.floor(durationMs / 400);
+    const spawnInterval = setInterval(() => {
+      if (!fwRunning) { clearInterval(spawnInterval); return; }
+      spawnFirework();
+      spawnCount++;
+      if (spawnCount >= maxSpawns) clearInterval(spawnInterval);
+    }, 400);
+
+    // Dừng sau durationMs
+    setTimeout(() => {
+      fwRunning = false;
+      if (fwAnimFrame) { cancelAnimationFrame(fwAnimFrame); fwAnimFrame = null; }
+      clearInterval(spawnInterval);
+      fwCanvas.style.display = "none";
+      fwCtx.clearRect(0,0,fwCanvas.width,fwCanvas.height);
+      fwParticles = [];
+    }, durationMs + 2000);
+  }
+
+  function showJackpotWin(accLabel, title) {
+    document.getElementById("jackpot-win-text").textContent = title || "🎉 ĂN HŨ JACKPOT! 🎉";
+    document.getElementById("jackpot-win-acc").textContent = accLabel;
+    const overlay = document.getElementById("jackpot-overlay");
+    overlay.style.display = "flex";
+    startFireworks(8000);
+    recordFireworks(accLabel, 10000);
+    setTimeout(() => { overlay.style.display = "none"; }, 5000);
+  }
+
+  // ── Toast Notification ───────────────────────
+  function showToast({ title, body, type = 'info', duration = 5000 }) {
+    const container = document.getElementById("toast-container");
+    const toast = document.createElement("div");
+    toast.className = `toast ${type}`;
+    toast.innerHTML = `
+      <div class="toast-title">${title}</div>
+      ${body ? `<div class="toast-body">${body}</div>` : ''}
+    `;
+    
+    container.appendChild(toast);
+    
+    // Click để đóng sớm
+    toast.onclick = () => {
+      toast.classList.add("hiding");
+      setTimeout(() => toast.remove(), 300);
+    };
+    
+    // Auto remove sau duration
+    setTimeout(() => {
+      if (toast.parentElement) {
+        toast.classList.add("hiding");
+        setTimeout(() => toast.remove(), 300);
+      }
+    }, duration);
+  }
+
+  // ── Record Fireworks ─────────────────────────
+  let mediaRecorder = null;
+  let recordedChunks = [];
+
+  function recordFireworks(accLabel, durationMs = 10000) {
+    if (!fwCanvas.captureStream) {
+      console.warn("[Record] Trình duyệt không hỗ trợ captureStream");
+      return;
+    }
+
+    // Dừng recording cũ nếu đang chạy
+    if (mediaRecorder && mediaRecorder.state !== "inactive") {
+      mediaRecorder.stop();
+    }
+
+    recordedChunks = [];
+
+    // Ghép canvas pháo hoa + overlay jackpot vào 1 canvas record
+    const recordCanvas = document.createElement("canvas");
+    recordCanvas.width = fwCanvas.width;
+    recordCanvas.height = fwCanvas.height;
+    const rCtx = recordCanvas.getContext("2d");
+
+    // Vẽ frame liên tục từ fireworks canvas + overlay text
+    let recordFrame;
+    function drawRecordFrame() {
+      rCtx.clearRect(0, 0, recordCanvas.width, recordCanvas.height);
+      // Nền đen
+      rCtx.fillStyle = "#0a0a1a";
+      rCtx.fillRect(0, 0, recordCanvas.width, recordCanvas.height);
+      // Vẽ pháo hoa từ canvas gốc
+      rCtx.drawImage(fwCanvas, 0, 0);
+      // Vẽ text jackpot lên trên
+      const cx = recordCanvas.width / 2;
+      const cy = recordCanvas.height / 2;
+      rCtx.save();
+      rCtx.textAlign = "center";
+      rCtx.textBaseline = "middle";
+      rCtx.shadowColor = "#f59e0b";
+      rCtx.shadowBlur = 40;
+      rCtx.fillStyle = "#fbbf24";
+      rCtx.font = "bold 64px 'Segoe UI', sans-serif";
+      rCtx.fillText(document.getElementById("jackpot-win-text").textContent, cx, cy - 30);
+      rCtx.shadowBlur = 10;
+      rCtx.fillStyle = "#e0e0e0";
+      rCtx.font = "32px 'Segoe UI', sans-serif";
+      rCtx.fillText(accLabel, cx, cy + 50);
+      rCtx.restore();
+      recordFrame = requestAnimationFrame(drawRecordFrame);
+    }
+    drawRecordFrame();
+
+    // Chọn codec tốt nhất được hỗ trợ
+    const mimeType = ["video/webm;codecs=vp9","video/webm;codecs=vp8","video/webm","video/mp4"]
+      .find(m => MediaRecorder.isTypeSupported(m)) || "";
+
+    try {
+      const stream = recordCanvas.captureStream(30);
+      mediaRecorder = new MediaRecorder(stream, mimeType ? { mimeType } : {});
+
+      mediaRecorder.ondataavailable = (e) => {
+        if (e.data && e.data.size > 0) recordedChunks.push(e.data);
+      };
+
+      mediaRecorder.onstop = () => {
+        cancelAnimationFrame(recordFrame);
+        if (recordedChunks.length === 0) return;
+        const blob = new Blob(recordedChunks, { type: mimeType || "video/webm" });
+        const ext = mimeType.includes("mp4") ? "mp4" : "webm";
+        const now = new Date();
+        const ts = `${now.getFullYear()}${String(now.getMonth()+1).padStart(2,"0")}${String(now.getDate()).padStart(2,"0")}_${String(now.getHours()).padStart(2,"0")}${String(now.getMinutes()).padStart(2,"0")}${String(now.getSeconds()).padStart(2,"0")}`;
+        const safeName = accLabel.replace(/[^a-zA-Z0-9_\-]/g, "_");
+        const filename = `jackpot_${safeName}_${ts}.${ext}`;
+
+        // Electron: dùng IPC để lưu file qua main process
+        if (window.electronAPI) {
+          blob.arrayBuffer().then(buf => {
+            window.electronAPI.saveVideo(buf, filename);
+            console.log(`[Record] ✅ Đã gửi video sang main process: ${filename} (${(blob.size/1024/1024).toFixed(1)} MB)`);
+          });
+        } else {
+          // Fallback browser download
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement("a");
+          a.href = url;
+          a.download = filename;
+          a.click();
+          URL.revokeObjectURL(url);
+          console.log(`[Record] ✅ Đã lưu video: ${filename} (${(blob.size/1024/1024).toFixed(1)} MB)`);
+        }
+      };
+
+      mediaRecorder.start(100); // chunk mỗi 100ms
+
+      // Dừng sau durationMs
+      setTimeout(() => {
+        if (mediaRecorder && mediaRecorder.state !== "inactive") {
+          mediaRecorder.stop();
+        }
+      }, durationMs);
+
+      console.log(`[Record] 🎬 Bắt đầu ghi video pháo hoa (${durationMs/1000}s)...`);
+    } catch (err) {
+      cancelAnimationFrame(recordFrame);
+      console.error("[Record] Lỗi khởi tạo MediaRecorder:", err);
+    }
+  }
+</script>
+</body>
+</html>

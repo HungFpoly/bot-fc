@@ -1,0 +1,5 @@
+node_modules/
+.env
+chrome-profiles/
+dist/
+.DS_Store
