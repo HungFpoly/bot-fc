@@ -2,7 +2,7 @@
  * GarenaAuth - Đăng nhập Garena bằng Puppeteer + Stealth + Persistent Profile
  *
  * === SỰ KIỆN BILAC (MỚI) ===
- * TARGET_URL: https://bongvang.fconline.garena.vn
+ * TARGET_URL: https://bilac.fconline.garena.vn
  *
  * === SỰ KIỆN CŨ (VQSC) - GIỮ LẠI CHO SỰ KIỆN SAU ===
  * TARGET_URL: https://vqsc.fconline.garena.vn
@@ -18,11 +18,8 @@ const fs = require("fs");
 puppeteer.use(StealthPlugin());
 
 // === SỰ KIỆN SIEUXOAY (MỚI) ===
-const TARGET_URL  = "https://bongvang.fconline.garena.vn";
-const TARGET_HOST = "bongvang.fconline.garena.vn";
-const SSO_LOGIN_URL = "https://auth.garena.com/universal/oauth?platform=1&state=3gABpG5leHTZIGh0dHBzOi8vYm9uZ3ZhbmcuZmNvbmxpbmUuZ2FyZW5hLnZuLw&client_id=100072&response_type=code&redirect_uri=https%3A%2F%2Fbongvang.fconline.garena.vn%2Fconnect%2Fgarena%2Fcallback";
-// Cookie phiên đăng nhập trên Bóng Vàng.
-const SESSION_COOKIE = "ff_session";
+const { BASE_URL: TARGET_URL, TARGET_HOST, SSO_LOGIN_URL, SESSION_COOKIE } = require("./event-config");
+const { closeLoginBrowser } = require('./login-pool');
 
 // === SỰ KIỆN CŨ (VQSC) - comment lại ===
 // const TARGET_URL  = "https://vqsc.fconline.garena.vn";
@@ -77,6 +74,7 @@ async function pollForCookie(page, maxMs = 60000) {
   let _gotoedHome = false;
 
   while (Date.now() - start < maxMs) {
+    if (page.isClosed() || !page.browser().isConnected()) return null;
     attempt++;
 
     // Nếu page đang stuck ở callback → tự goto trang chủ để hoàn tất login
@@ -156,6 +154,8 @@ class GarenaAuth {
       }
 
       browser = await puppeteer.launch({
+        protocolTimeout: 15000,
+        timeout: 30000,
         headless: false,
         executablePath: chromePath,
         userDataDir: profileDir,
@@ -198,13 +198,13 @@ class GarenaAuth {
 
       // ── Step 1: Check session cũ ──
       console.log(`[Auth] [${username}] Kiểm tra session cũ...`);
-      await page.goto(TARGET_URL + "/", { waitUntil: "networkidle2", timeout: 30000 });
+      await page.goto(TARGET_URL + "/", { waitUntil: "domcontentloaded", timeout: 30000 });
       await humanDelay(1500, 2500);
 
       let cookieStr = await pollForCookie(page, 3000);
       if (cookieStr) {
         console.log(`[Auth] ✅ [${username}] Session cũ vẫn còn!`);
-        await browser.close();
+        await closeLoginBrowser(browser);
         return { success: true, cookie: cookieStr, username };
       }
 
@@ -220,7 +220,7 @@ class GarenaAuth {
         cookieStr = await pollForCookie(page, 5000);
         if (cookieStr) {
           console.log(`[Auth] ✅ [${username}] Session Garena còn, cookie OK!`);
-          await browser.close();
+          await closeLoginBrowser(browser);
           return { success: true, cookie: cookieStr, username };
         }
       }
@@ -252,7 +252,7 @@ class GarenaAuth {
           console.log(`[Auth] ✅ [${username}] Vượt DataDome!`);
           await humanDelay(2000, 3000);
         } catch (e) {
-          await browser.close();
+          await closeLoginBrowser(browser);
           return { success: false, error: "Hết thời gian chờ giải DataDome (3 phút)" };
         }
       }
@@ -265,10 +265,10 @@ class GarenaAuth {
         // Có thể đã redirect về bilac rồi, thử poll cookie
         cookieStr = await pollForCookie(page, 5000);
         if (cookieStr) {
-          await browser.close();
+          await closeLoginBrowser(browser);
           return { success: true, cookie: cookieStr, username };
         }
-        await browser.close();
+        await closeLoginBrowser(browser);
         return { success: false, error: `Không tìm thấy form login. URL: ${page.url()}` };
       }
 
@@ -280,7 +280,7 @@ class GarenaAuth {
       console.log(`[Auth] [${username}] Điền username...`);
       const usernameInput = await page.$('input[type="text"], input[type="email"]');
       if (!usernameInput) {
-        await browser.close();
+        await closeLoginBrowser(browser);
         return { success: false, error: "Không tìm thấy ô tài khoản" };
       }
       await humanClick(page, usernameInput);
@@ -292,7 +292,7 @@ class GarenaAuth {
       console.log(`[Auth] [${username}] Điền password...`);
       const passwordInput = await page.$('input[type="password"]');
       if (!passwordInput) {
-        await browser.close();
+        await closeLoginBrowser(browser);
         return { success: false, error: "Không tìm thấy ô mật khẩu" };
       }
       await humanClick(page, passwordInput);
@@ -313,7 +313,7 @@ class GarenaAuth {
 
       if (cookieStr) {
         console.log(`[Auth] ✅ [${username}] Login thành công! URL hiện tại: ${page.url()}`);
-        await browser.close();
+        await closeLoginBrowser(browser);
         return { success: true, cookie: cookieStr, username };
       }
 
@@ -325,7 +325,7 @@ class GarenaAuth {
         });
       } catch (_) {}
 
-      await browser.close();
+      await closeLoginBrowser(browser);
       return {
         success: false,
         error: errorMsg
@@ -335,7 +335,7 @@ class GarenaAuth {
 
     } catch (err) {
       console.log(`[Auth] ❌ [${username}] Lỗi: ${err.message}`);
-      if (browser) await browser.close();
+      if (browser) await closeLoginBrowser(browser);
       return { success: false, error: `Lỗi: ${err.message}` };
     }
   }

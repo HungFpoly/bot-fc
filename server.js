@@ -4,14 +4,36 @@ if (!process.env.ELECTRON) require("dotenv").config();
 const { BotWorker, setBroadcast } = require("./bot-worker");
 const { jackpotMonitor } = require("./jackpot-monitor");
 const { GarenaAuth } = require("./garena-auth");
+const { event } = require("./event-config");
+const { BotScheduler } = require("./bot-scheduler");
+const { createTelegramNotifiers } = require('./telegram-notifier');
+const telegramNotifiers = createTelegramNotifiers();
 
 const app = express();
-const PORT = 3000;
+const PORT = Number(process.env.PORT) || 3000;
 
 app.use(express.json());
 app.use(express.static(path.join(__dirname, "public")));
 
+app.get("/api/event", (req, res) => {
+  res.json({ name: event.name });
+});
+
 const workers = new Map();
+const { JackpotRanges, validateRange } = require('./jackpot-range');
+const jackpotRanges = new JackpotRanges({
+  minJackpot: Number(process.env.MIN_JACKPOT) || 11870,
+  maxJackpot: Number(process.env.MAX_JACKPOT) || 0,
+});
+const scheduler = new BotScheduler(workers);
+let stopGeneration = 0;
+setInterval(() => { void scheduler.pump(); }, 100);
+app.get('/api/config', (req, res) => res.json({ ...scheduler.config, ...jackpotRanges.shared }));
+app.use(['/api/bots/add', '/api/bots/add-bulk', '/api/login-and-run'], (req, res, next) => {
+  if (req.method !== 'POST') return next();
+  try { scheduler.configure(req.body.config); next(); }
+  catch (error) { res.status(400).json({ error: error.message }); }
+});
 jackpotMonitor.setCookieProvider((currentCookie) => {
   const active = [...workers.values()].filter(worker => worker.running && worker.cookie);
   const fallback = active.find(worker => worker.cookie !== currentCookie)
@@ -20,10 +42,12 @@ jackpotMonitor.setCookieProvider((currentCookie) => {
 });
 
 // Config cấp API — chỉ đọc từ .env, KHÔNG nhận từ client / không hiện trên UI
-// === SỰ KIỆN BONG VÀNG ===
+// Event-specific payloads are defined in event-config.js.
 function apiConfig() {
   return {
     spinNum:     parseInt(process.env.SPIN_NUM, 10) || 10,
+    spinType:    parseInt(process.env.BILAC_SPIN_TYPE, 10) || 2,
+    spinConfId:  parseInt(process.env.SPIN_CONF_ID, 10) || 5,
     paymentType: process.env.PAYMENT_TYPE || "fc",
   };
 }
@@ -31,7 +55,7 @@ function apiConfig() {
 // Gộp config từ client với config API; client không ghi đè được config API
 function resolveConfig(clientConfig = {}) {
   const { spinType, spinConfId, spinNum, paymentType, ...safe } = clientConfig || {};
-  return { ...safe, ...apiConfig() };
+  return { ...jackpotRanges.shared, ...safe, ...apiConfig() };
 }
 
 // SSE clients
@@ -39,6 +63,9 @@ const sseClients = new Set();
 
 // Broadcast tất cả events xuống browser
 function broadcast(type, data) {
+  if (type === 'jackpot_win') {
+    for (const notifier of telegramNotifiers) void notifier.notify(data, event.name);
+  }
   const msg = `data: ${JSON.stringify({ type, data })}\n\n`;
   for (const client of sseClients) {
     try { client.write(msg); } catch (_) {}
@@ -52,14 +79,15 @@ jackpotMonitor.onJackpotBust = ({ from, to, winner, prize, time }) => {
   console.log(`[Server] 💥 HŨ NỔ lúc ${timeStr}: ${from} → ${to} FC | 🏆 ${winner} (${prize})`);
   broadcast("bust", { from, to, winner, prize, time: timeStr });
 };
-jackpotMonitor.onOwnJackpot = ({ nickname, prize, parsedValue }) => {
+jackpotMonitor.onOwnJackpot = ({ nickname, uid, prize, parsedValue }) => {
   // Khi có người nổ hũ, check tất cả bot xem có ai trùng nickname không
   console.log(`[Server] 🔍 Checking if ${nickname} matches any bot...`);
   for (const [, worker] of workers) {
-    if (worker.accountName && worker.accountName === nickname && worker.running) {
+    if (worker.matchesJackpotWinner({ nickname, uid }) && worker.running) {
+      worker.jackpotWins++;
       console.log(`[Server] 🏆 Bot ${worker.label} (${nickname}) TRÚNG HŨ ${prize} → DỪNG BOT!`);
       worker._log(`🏆🏆🏆 BẠN ĂN HŨ ${prize}! BOT TẰM DỪNG! 🏆🏆🏆`);
-      broadcast("jackpot_win", { ...worker.getStatus(), type: "grand" });
+      broadcast("jackpot_win", { ...worker.getStatus(), type: "grand", prize });
       worker.stop();
     }
   }
@@ -71,9 +99,9 @@ jackpotMonitor.onMiniJackpot = ({ nickname, prize, parsedValue, time }) => {
 
   // Mini Jackpot không dừng bot; chỉ thông báo nếu nickname trùng tài khoản đang chạy.
   for (const [, worker] of workers) {
-    if (worker.accountName && worker.accountName === nickname && worker.running) {
+    if (worker.matchesJackpotWinner({ nickname }) && worker.running) {
       worker._log(`🎊 BẠN TRÚNG MINI JACKPOT ${prize}! Bot tiếp tục chạy.`);
-      broadcast("jackpot_win", { ...worker.getStatus(), type: "mini" });
+      broadcast("jackpot_win", { ...worker.getStatus(), type: "mini", prize });
     }
   }
 };
@@ -112,7 +140,7 @@ app.get("/api/bots", (req, res) => {
 });
 
 // API: Thêm và khởi chạy bot mới
-app.post("/api/bots/add", (req, res) => {
+app.post("/api/bots/add", async (req, res) => {
   const { cookie, label, config } = req.body;
 
   if (!cookie) {
@@ -122,7 +150,7 @@ app.post("/api/bots/add", (req, res) => {
   const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
   const worker = new BotWorker(id, cookie, label || `Acc #${workers.size + 1}`, resolveConfig(config));
   workers.set(id, worker);
-  worker.start();
+  const started = await scheduler.enqueue(worker);
 
   // Khởi động JackpotMonitor nếu chưa chạy
   if (!jackpotMonitor.running) {
@@ -130,37 +158,47 @@ app.post("/api/bots/add", (req, res) => {
     jackpotMonitor.start();
   }
 
-  res.json({ success: true, id, message: `Bot ${label || id} đã khởi chạy` });
+  res.json({ success: true, id, started, message: started
+    ? `Bot ${label || id} đã khởi chạy`
+    : `Bot ${label || id} đã thêm; cần hoàn tất lượt quay đầu trước khi chạy` });
 });
 
 // API: Thêm nhiều bot cùng lúc
-app.post("/api/bots/add-bulk", (req, res) => {
+app.post("/api/bots/add-bulk", async (req, res) => {
   const { accounts, config } = req.body;
+  const generation = stopGeneration;
 
   if (!accounts || !Array.isArray(accounts) || accounts.length === 0) {
     return res.status(400).json({ error: "Thiếu danh sách accounts" });
   }
 
   const results = [];
-  accounts.forEach((acc, index) => {
+  for (const [index, acc] of accounts.entries()) {
     const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 6) + index;
     const label = acc.label || `Acc #${workers.size + 1}`;
     const worker = new BotWorker(id, acc.cookie, label, resolveConfig(config || acc.config));
     workers.set(id, worker);
-    worker.start();
-    results.push({ id, label });
+    const started = generation === stopGeneration && await scheduler.enqueue(worker);
+    results.push({ id, label, started });
 
     // Khởi động JackpotMonitor với cookie acc đầu tiên
     if (!jackpotMonitor.running) {
       jackpotMonitor.setCookie(acc.cookie);
       jackpotMonitor.start();
     }
-  });
+  }
 
   res.json({ success: true, count: results.length, bots: results });
 });
 
 // API: Dừng một bot
+app.post("/api/bots/:id/first-spin", async (req, res) => {
+  const worker = workers.get(req.params.id);
+  if (!worker) return res.status(404).json({ error: "Không tìm thấy bot" });
+  const result = await worker.spinFirstTime();
+  res.status(result.success ? 200 : 409).json(result);
+});
+
 app.post("/api/bots/:id/stop", (req, res) => {
   const worker = workers.get(req.params.id);
   if (!worker) return res.status(404).json({ error: "Không tìm thấy bot" });
@@ -169,10 +207,11 @@ app.post("/api/bots/:id/stop", (req, res) => {
 });
 
 // API: Khởi động lại một bot
-app.post("/api/bots/:id/start", (req, res) => {
+app.post("/api/bots/:id/start", async (req, res) => {
   const worker = workers.get(req.params.id);
   if (!worker) return res.status(404).json({ error: "Không tìm thấy bot" });
-  worker.start();
+  const started = await scheduler.enqueue(worker);
+  if (!started) return res.status(409).json({ success: false, error: worker.getStatus().lastLog });
   res.json({ success: true, message: `Bot ${worker.label} đã chạy lại` });
 });
 
@@ -186,7 +225,17 @@ app.delete("/api/bots/:id", (req, res) => {
 });
 
 // API: Dừng tất cả
+app.post('/api/bots/start-all', async (req, res) => {
+  const generation = stopGeneration;
+  for (const worker of workers.values()) {
+    if (generation !== stopGeneration) break;
+    await scheduler.enqueue(worker);
+  }
+  res.json({ success: true });
+});
+
 app.post("/api/bots/stop-all", (req, res) => {
+  stopGeneration++;
   for (const [, worker] of workers) {
     worker.stop();
   }
@@ -194,14 +243,33 @@ app.post("/api/bots/stop-all", (req, res) => {
 });
 
 // API: Cập nhật config chung
-app.post("/api/config", (req, res) => {
-  // Chỉ nhận config hiển thị trên UI. SPIN_NUM / SPIN_CONF_ID / PAYMENT_TYPE
-  // là config cấp API, lấy từ .env nên bỏ qua nếu client có gửi.
-  const { minJackpot, maxJackpot, spinsPerTurn } = req.body;
-  console.log(`[Server] Cập nhật config: min=${minJackpot}, max=${maxJackpot}, spins=${spinsPerTurn}`);
+app.post('/api/bots/:id/jackpot-range', (req, res) => {
+  const worker = workers.get(req.params.id);
+  if (!worker) return res.status(404).json({ error: 'Không tìm thấy bot' });
+  try { jackpotRanges.configureWorker(worker, req.body); }
+  catch (error) { return res.status(400).json({ error: error.message }); }
+  broadcast('snapshot', { bots: [...workers.values()].map(bot => bot.getStatus()) });
+  res.json({ success: true, bot: worker.getStatus() });
+});
 
+app.post("/api/config", (req, res) => {
+  // SPIN_NUM / SPIN_CONF_ID / PAYMENT_TYPE là config cấp API lấy từ .env.
+  const { minJackpot, maxJackpot, spinsPerTurn, baseInterval = 200, spinBurst } = req.body;
+  if (spinsPerTurn !== undefined && (!Number.isInteger(spinsPerTurn) || spinsPerTurn < 1 || spinsPerTurn > 50)) return res.status(400).json({ error: "Số lần spam phải từ 1 đến 50" });
+  if (spinBurst !== undefined && typeof spinBurst !== "boolean") return res.status(400).json({ error: "Spin liên tiếp không hợp lệ" });
+  if (!Number.isInteger(baseInterval) || baseInterval < 0 || baseInterval > 60000) {
+    return res.status(400).json({ error: "Thời gian gọi API phải từ 0 đến 60000 ms" });
+  }
+  const range = { ...jackpotRanges.shared };
+  if (minJackpot !== undefined) range.minJackpot = minJackpot;
+  if (maxJackpot !== undefined) range.maxJackpot = maxJackpot;
+  try { validateRange(range); scheduler.configure(req.body); }
+  catch (error) { return res.status(400).json({ error: error.message }); }
+  console.log(`[Server] Cập nhật config: min=${minJackpot}, max=${maxJackpot}, spins=${spinsPerTurn}, apiInterval=${baseInterval}ms`);
+
+  jackpotRanges.updateShared(range, workers.values());
   for (const [, worker] of workers) {
-    worker.applyConfig({ minJackpot, maxJackpot, spinsPerTurn });
+    worker.applyConfig({ spinsPerTurn, baseInterval, spinBurst });
   }
 
   // Đẩy snapshot ngay để UI phản ánh config mới, không phải chờ 5s
@@ -238,6 +306,7 @@ app.post("/api/login", async (req, res) => {
 // API: Đăng nhập nhiều acc và khởi chạy bot luôn (SONG SONG)
 app.post("/api/login-and-run", async (req, res) => {
   const { accounts, config } = req.body;
+  const generation = stopGeneration;
 
   if (!accounts || !Array.isArray(accounts) || accounts.length === 0) {
     return res.status(400).json({ error: "Thiếu danh sách accounts" });
@@ -261,14 +330,14 @@ app.post("/api/login-and-run", async (req, res) => {
       const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 6) + index;
       const worker = new BotWorker(id, loginResult.cookie, label, resolveConfig(config));
       workers.set(id, worker);
-      worker.start();
+      const started = generation === stopGeneration && await scheduler.enqueue(worker);
 
       if (!jackpotMonitor.running) {
         jackpotMonitor.setCookie(loginResult.cookie);
         jackpotMonitor.start();
       }
 
-      results.push({ id, label, username, status: "ok" });
+      results.push({ id, label, username, status: started ? "ok" : "ready" });
     } else {
       results.push({ label, username, status: "failed", error: loginResult.error });
     }
@@ -284,20 +353,11 @@ app.post("/api/login-and-run", async (req, res) => {
 const LOGIN_BATCH_SIZE = parseInt(process.env.LOGIN_BATCH_SIZE) || 3;
 
 async function loginBatch(accounts) {
-  const results = [];
-  for (let i = 0; i < accounts.length; i += LOGIN_BATCH_SIZE) {
-    const batch = accounts.slice(i, i + LOGIN_BATCH_SIZE);
-    console.log(`[Auth] Batch ${Math.floor(i/LOGIN_BATCH_SIZE)+1}: login ${batch.map(a=>a.username||a.acc?.username).join(", ")}...`);
-    const batchResults = await Promise.all(batch.map(item => {
-      // hỗ trợ cả {username,password,label} lẫn {idx,acc,result}
-      if (item.acc) return GarenaAuth.login(item.acc.username, item.acc.password).then(r => ({ ...item, result: r }));
-      return GarenaAuth.login(item.username, item.password).then(r => ({ ...item, result: r }));
-    }));
-    results.push(...batchResults);
-  }
-  return results;
+  const { loginPool } = require('./login-pool');
+  return loginPool(accounts, LOGIN_BATCH_SIZE, (username, password) => GarenaAuth.login(username, password));
 }
 function stopAll() {
+  stopGeneration++;
   for (const [, worker] of workers) {
     worker.stop();
   }
@@ -322,6 +382,8 @@ module.exports = { startApp, stopAll };
 
 // Tự động login các acc từ .env khi khởi động
 async function autoLoginFromEnv() {
+  if (process.env.DISABLE_AUTO_LOGIN === '1') return;
+  const generation = stopGeneration;
   const accounts = [];
   // Quét ACCOUNT_1 đến ACCOUNT_20 (bỏ qua số bị thiếu/comment)
   for (let i = 1; i <= 20; i++) {
@@ -342,7 +404,7 @@ async function autoLoginFromEnv() {
   const botConfig    = resolveConfig({ minJackpot, maxJackpot, spinsPerTurn });
 
   const zoneStr = maxJackpot > 0 ? `${minJackpot}-${maxJackpot} FC` : `>= ${minJackpot} FC`;
-  console.log(`[Auto] Đăng nhập ${accounts.length} acc từ .env (vùng bắn: ${zoneStr}, ${spinsPerTurn} lần gọi/turn, spinNum=${botConfig.spinNum}, batch=${LOGIN_BATCH_SIZE})...`);
+  console.log(`[Auto] Đăng nhập ${accounts.length} acc từ .env (sự kiện: ${event.name}, vùng bắn: ${zoneStr}, ${spinsPerTurn} lần gọi/turn, batch=${LOGIN_BATCH_SIZE})...`);
 
   const items = accounts.map((acc, idx) => ({ idx, acc }));
   const results = await loginBatch(items);
@@ -352,12 +414,12 @@ async function autoLoginFromEnv() {
       const id = Date.now().toString(36) + Math.random().toString(36).slice(2,6) + idx;
       const worker = new BotWorker(id, result.cookie, acc.label, botConfig);
       workers.set(id, worker);
-      worker.start();
+      const started = generation === stopGeneration && await scheduler.enqueue(worker);
       if (!jackpotMonitor.running) {
         jackpotMonitor.setCookie(result.cookie);
         jackpotMonitor.start();
       }
-      console.log(`[Auto] ✅ ${acc.label} (${acc.username}) đã chạy`);
+      console.log(`[Auto] ✅ ${acc.label} (${acc.username}) ${started ? "đã chạy" : "đã thêm, chờ quay lần đầu"}`);
     } else {
       console.log(`[Auto] ❌ ${acc.label} (${acc.username}): ${result.error}`);
     }

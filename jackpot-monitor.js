@@ -22,8 +22,7 @@
 const WebSocket = require("ws");
 
 // === SỰ KIỆN SIEUXOAY (MỚI) ===
-const BASE_URL = "https://bongvang.fconline.garena.vn";
-const WS_HOST  = "wss://sock.bis.fo4.garena.vn";
+const { BASE_URL, event } = require("./event-config");
 
 // === SỰ KIỆN CŨ (VQSC) - comment lại ===
 // const BASE_URL = "https://vqsc.fconline.garena.vn";
@@ -50,6 +49,7 @@ class JackpotMonitor {
     this._pendingWinner = null;
     this._recentReset = null;
     this._lastBustKey = null;
+    this._recentJackpotWins = new Map();
     this._latestJackpotWin = null;
     this._lastMiniBustKey = null; // NEW: dedup Mini bust events
     this._lastMiniEvent = null;
@@ -160,6 +160,18 @@ class JackpotMonitor {
     return true;
   }
 
+  _isDuplicateJackpotWin(nickname, prize) {
+    const now = Date.now();
+    const key = `${String(nickname).trim().toLowerCase()}_${prize}`;
+    const last = this._recentJackpotWins.get(key);
+    if (last && now - last < 60000) return true;
+    this._recentJackpotWins.set(key, now);
+    for (const [oldKey, time] of this._recentJackpotWins) {
+      if (now - time >= 60000) this._recentJackpotWins.delete(oldKey);
+    }
+    return false;
+  }
+
   _setMiniJackpot(value) {
     if (value > 0 && value !== this.miniJackpot) {
       // Phát hiện Mini nổ: giảm >50%
@@ -244,7 +256,7 @@ class JackpotMonitor {
     // Fallback lấy winner khi socket không kịp gửi event.
     for (let attempt = 0; attempt < 5; attempt++) {
       try {
-        const response = await this._fetchWithCookieFallback(`${BASE_URL}/api/app/me/get_jackpot_infos`, {
+        const response = await this._fetchWithCookieFallback(`${BASE_URL}${event.jackpotPath}`, {
           method: "GET",
           headers: this._headers(),
         });
@@ -252,7 +264,10 @@ class JackpotMonitor {
         if (response.ok) {
           const res = await response.json();
           // payload.jackpot_billboard: { value: "16.052 FC", nickname: "cloi2301" }
-          const billboard = res?.payload?.jackpot_billboard || res?.jackpot_billboard;
+          const data = res?.payload ?? res;
+          const billboard = event.jackpotBillboard
+            ? event.jackpotBillboard(data)
+            : data?.jackpot_billboard;
           console.log(`[JackpotMonitor] _fetchJackpotWinner attempt ${attempt+1}: billboard=${JSON.stringify(billboard)} lastKey=${this._lastBustKey}`);
           
           if (billboard?.nickname && billboard?.value) {
@@ -269,10 +284,14 @@ class JackpotMonitor {
             console.log(`[JackpotMonitor] 🔍 Parse: "${valueStr}" → ${parsedValue} FC (group=${groupedValue}) | bustKey=${bustKey} | lastKey=${this._lastBustKey}`);
             
             if (bustKey !== this._lastBustKey && parsedValue > 0) {
+              if (this._isDuplicateJackpotWin(billboard.nickname, parsedValue)) break;
               winner = billboard.nickname;
               prizeValue = billboard.value; // Giữ nguyên format gốc "16.052 FC"
               this._lastBustKey = bustKey;
               console.log(`[JackpotMonitor] 🏆 Người trúng hũ: ${winner} - ${prizeValue}`);
+              if (event.jackpotBillboard && this.onOwnJackpot) {
+                this.onOwnJackpot({ nickname: winner, prize: prizeValue, parsedValue });
+              }
               break;
             } else if (bustKey === this._lastBustKey) {
               console.log(`[JackpotMonitor] ⏭️ Skip duplicate: ${bustKey}`);
@@ -306,7 +325,7 @@ class JackpotMonitor {
     this.running = true;
     console.log("[JackpotMonitor] 🟢 Khởi động...");
 
-    // Lấy socketUid từ /api/app/me
+    // Lấy socket_account_id từ /api/user/get
     await this._fetchSocketInfo();
 
     if (this.socketUid) {
@@ -335,28 +354,31 @@ class JackpotMonitor {
   }
 
   /**
-   * Lấy socketUid từ /api/app/me.
-   * Response: { socketUid, socketUrl, user, ... }
+   * Lấy ID socket từ /api/user/get.
+   * Response: { socket_account_id, socket_env, jackpot_value, user, ... }
    */
   async _fetchSocketInfo() {
     try {
-      const response = await this._fetchWithCookieFallback(`${BASE_URL}/api/app/me`, {
+      const response = await this._fetchWithCookieFallback(`${BASE_URL}${event.accountPath}`, {
         method: "GET",
         headers: this._headers(),
       });
 
       if (response.ok) {
         const res = await response.json();
-        const data = res;
+        const data = res?.payload ?? res;
 
-        this.socketUid = data?.socketUid || null;
+        this.socketUid = event.socketId(data) ?? null;
+        this.socketUrl = event.socketUrl(data);
+        if (!this.socketUrl) this.socketUid = null;
+
+        const jackpot = event.jackpot ? event.jackpot(data) : data?.jackpot_value;
+        if (Number.isFinite(jackpot) && jackpot >= 0) {
+          this._setJackpot(jackpot);
+        }
 
         if (this.socketUid) {
           console.log(`[JackpotMonitor] socketUid: ${this.socketUid}`);
-          // Lấy luôn jackpot_value ban đầu
-          if (data?.jackpot_value > 0) {
-            this._setJackpot(data.jackpot_value);
-          }
         } else {
           console.log(`[JackpotMonitor] ⚠️ Không tìm thấy socketUid`);
         }
@@ -368,10 +390,15 @@ class JackpotMonitor {
 
   _connectWebSocket() {
     // BILAC: dùng WS_HOST cố định
-    const url = `${WS_HOST}/io/?account_id=${this.socketUid}&EIO=4&transport=websocket`;
+    const url = new URL(this.socketUrl);
+    url.protocol = url.protocol === "http:" ? "ws:" : url.protocol === "https:" ? "wss:" : url.protocol;
+    if (url.pathname === "/") url.pathname = "/io/";
+    url.searchParams.set("account_id", this.socketUid);
+    url.searchParams.set("EIO", "4");
+    url.searchParams.set("transport", "websocket");
     console.log(`[JackpotMonitor] 🔌 Kết nối WebSocket: ${url}`);
 
-    this.ws = new WebSocket(url, {
+    this.ws = new WebSocket(url.href, {
       headers: {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36",
         Origin: BASE_URL,
@@ -400,6 +427,9 @@ class JackpotMonitor {
     this.ws.on("close", (code, reason) => {
       console.log(`[JackpotMonitor] ⚡ WS đóng: ${code} ${reason}`);
       this._cleanup();
+      // A disconnected socket cannot confirm that the last pool value is current.
+      this.jackpot = 0;
+      if (this.onJackpotChange) this.onJackpotChange(0);
       if (this.running) {
         const cookieChanged = this.rotateCookie();
         console.log("[JackpotMonitor] Reconnect sau 5s...");
@@ -483,25 +513,31 @@ class JackpotMonitor {
           
           // TYPE 2: jackpot - event nổ hũ có nickname
           // 42["message",{"content":{"env":"live","type":"jackpot","value":"17.698 FC","nickname":"RIOJACKPOTxSSSX2"}}]
-          if (content && content.type === "jackpot" && content.nickname && content.value) {
-            console.log(`[JackpotMonitor] 🎰 JACKPOT EVENT: ${content.nickname} trúng ${content.value}`);
+          const jackpotNickname = content?.nickname || content?.data?.account_name;
+          const jackpotValue = content?.value ?? content?.data?.jackpot_prize;
+          const jackpotUid = content?.data?.uid;
+          if (content?.type === "jackpot" && jackpotNickname && jackpotValue) {
+            console.log(`[JackpotMonitor] 🎰 JACKPOT EVENT: ${jackpotNickname} trúng ${jackpotValue}`);
             
             // Parse value từ string "17.698 FC" → số
-            const valueStr = content.value.toString();
+            const valueStr = jackpotValue.toString();
             const numericStr = valueStr.replace(/\s*FC$/i, '').trim().replace(/[.,]/g, '');
             const parsedValue = parseInt(numericStr, 10) || 0;
             
             // Broadcast bust event cho tất cả (kể cả chính mình)
             if (parsedValue > 0) {
-              const bustKey = `${content.nickname}_${Math.floor(parsedValue / 100) * 100}`;
+              const bustKey = content.data
+                ? `${jackpotUid || jackpotNickname}_${parsedValue}`
+                : `${jackpotNickname}_${Math.floor(parsedValue / 100) * 100}`;
               if (bustKey !== this._lastBustKey) {
+                if (this._isDuplicateJackpotWin(jackpotNickname, parsedValue)) return;
                 this._lastBustKey = bustKey;
-                console.log(`[JackpotMonitor] 🏆 Broadcasting jackpot event: ${content.nickname} - ${content.value}`);
+                console.log(`[JackpotMonitor] 🏆 Broadcasting jackpot event: ${jackpotNickname} - ${jackpotValue}`);
                 
                 // Broadcast bust feed
                 const winnerEvent = {
-                  nickname: content.nickname,
-                  prize: content.value,
+                  nickname: jackpotNickname,
+                  prize: typeof jackpotValue === "number" ? `${jackpotValue.toLocaleString("vi-VN")} FC` : jackpotValue,
                   time: new Date(),
                 };
                 if (!this._emitWinnerAfterRecentReset(winnerEvent)) {
@@ -511,9 +547,10 @@ class JackpotMonitor {
                 // Broadcast "own jackpot" để bot worker check nickname và dừng
                 if (this.onOwnJackpot) {
                   this.onOwnJackpot({ 
-                    nickname: content.nickname, 
-                    prize: content.value,
-                    parsedValue 
+                    nickname: jackpotNickname,
+                    uid: jackpotUid,
+                    prize: winnerEvent.prize,
+                    parsedValue,
                   });
                 }
               }
@@ -660,14 +697,15 @@ class JackpotMonitor {
   async _pollFallback() {
     while (this.running) {
       try {
-        const response = await this._fetchWithCookieFallback(`${BASE_URL}/api/app/me/get_jackpot_infos`, {
+        const response = await this._fetchWithCookieFallback(`${BASE_URL}${event.jackpotPath}`, {
           method: "GET",
           headers: this._headers(),
         });
 
         if (response.ok) {
           const res = await response.json();
-          const val = res?.payload?.jackpot_value ?? res?.jackpot_value ?? res?.jackpotValue;
+          const data = res?.payload ?? res;
+          const val = event.jackpot ? event.jackpot(data) : data?.jackpot_value ?? data?.jackpotValue;
           if (typeof val === "number" && val > 0) {
             this._setJackpot(val);
           }

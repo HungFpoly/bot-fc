@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>BILAC Multi-Bot</title>
+  <title>FC Multi-Bot</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body { font-family: 'Segoe UI', system-ui, sans-serif; background: #0a0a1a; color: #e0e0e0; min-height: 100vh; }
@@ -171,12 +171,22 @@
       0%, 100% { opacity: 1; }
       50% { opacity: 0.7; }
     }
+    @media (max-width: 640px) {
+      .header { flex-wrap: wrap; padding: 12px; gap: 8px; }
+      .header h1 { white-space: normal; }
+      .bust-feed { flex-basis: 100%; order: 3; }
+      .header-stats { flex-wrap: wrap; gap: 10px; }
+      .layout { flex-direction: column; height: auto; }
+      .left { width: 100%; min-width: 0; overflow: visible; }
+      .right { min-width: 0; overflow: visible; }
+      .bots-grid { grid-template-columns: minmax(0, 1fr); }
+    }
   </style>
 </head>
 <body>
 
 <div class="header">
-  <h1>⚽ BILAC Bot</h1>
+  <h1 id="event-heading">FC Bot</h1>
   <div class="bust-feed" id="bust-feed"><span id="bust-text" style="color:#4b5563">Chưa có sự kiện nổ hũ...</span></div>
   <div class="header-stats">
     <span>🎰 <strong id="hd-jackpot">---</strong> FC</span>
@@ -195,11 +205,22 @@
       <input type="number" id="cfg-min" value="14000">
       <label>Max Jackpot (FC) — 0 = không giới hạn</label>
       <input type="number" id="cfg-max" value="16500" min="0">
-      <label>Spin / Turn (số lượt gọi API)</label>
-      <input type="number" id="cfg-spins" value="3" min="1" max="50">
+      <label><input type="checkbox" id="cfg-burst" style="width:auto"> Spin không chờ response khi vào vùng Min–Max</label>
+      <p style="font-size:0.72rem;color:#94a3b8">Không chọn: chờ kết quả từng request và dùng thời gian giãn cách đã cấu hình.</p>
+      <p style="font-size:0.72rem;color:#94a3b8">Khi chọn: gửi đủ số lần bên dưới, cách nhau thời gian đã cấu hình (ví dụ 100ms hoặc 200ms), dù request trước chưa trả kết quả. 0ms = gửi đồng thời. Bấm Dừng ngừng gửi tiếp, không thu hồi request đã gửi.</p>
+      <label>Số lần spam / turn (lần gọi API)</label>
+      <input type="number" id="cfg-spins" value="5" min="1" max="50" step="1">
+      <label>Thời gian giữa các lần gọi API (ms)</label>
+      <input type="number" id="cfg-api-interval" value="200" min="0" max="60000" step="1">
+      <label><input type="checkbox" id="cfg-queue" style="width:auto"> Chạy theo hàng đợi</label>
+      <label>Số acc chạy đồng thời</label>
+      <input type="number" id="cfg-concurrent" value="3" min="1" max="1000" step="1">
+      <label>Khoảng cách spin giữa các bot (ms)</label>
+      <input type="number" id="cfg-spin-gap" value="100" min="0" max="60000" step="1">
       <div class="btn-row">
         <button class="btn btn-purple btn-sm" id="btn-apply" onclick="updateConfig()">Áp dụng</button>
         <button class="btn btn-red btn-sm" onclick="stopAll()">⏹ Dừng tất cả</button>
+        <button class="btn btn-green btn-sm" onclick="startAll()">▶ Chạy tất cả</button>
       </div>
     </div>
 
@@ -248,8 +269,85 @@
   </div>
 </div>
 
+<dialog id="range-dialog" style="margin:auto;width:min(420px,90vw);background:#151b2b;color:#e2e8f0;border:1px solid #475569;border-radius:12px;padding:24px">
+  <form id="range-form">
+    <h2 id="range-title">Min–Max của bot</h2>
+    <label><input type="checkbox" id="range-enabled" style="width:auto" onchange="toggleRangeFields()"> Dùng Min–Max riêng cho bot này</label>
+    <p style="font-size:0.8rem;color:#94a3b8">Nhập Min/Max để tự bật khoảng riêng, rồi bấm Lưu. Bỏ chọn và Lưu để dùng khoảng chung.</p>
+    <label for="range-min">Min Jackpot (FC)</label>
+    <input id="range-min" type="number" min="0" step="1" required>
+    <label for="range-max">Max Jackpot (FC) — 0 = không giới hạn</label>
+    <input id="range-max" type="number" min="0" step="1" required>
+    <p id="range-error" role="alert" style="color:#f87171"></p>
+    <div class="btn-row">
+      <button class="btn btn-purple btn-sm" id="range-save" type="submit">Lưu</button>
+      <button class="btn btn-sm" type="button" onclick="document.getElementById('range-dialog').close()">Hủy</button>
+    </div>
+  </form>
+</dialog>
 <script>
+  let rangeBotId = null;
+  function toggleRangeFields() {
+    const enabled = document.getElementById('range-enabled').checked;
+    for (const id of ['range-min', 'range-max']) {
+      document.getElementById(id).disabled = false;
+      document.getElementById(id).required = enabled;
+    }
+  }
+  for (const id of ['range-min', 'range-max']) {
+    document.getElementById(id).addEventListener('input', () => {
+      document.getElementById('range-enabled').checked = true;
+      toggleRangeFields();
+    });
+  }
+  function openJackpotRange(id) {
+    const bot = botsData.find(bot => bot.id === id);
+    if (!bot) return;
+    rangeBotId = id;
+    document.getElementById('range-title').textContent = `Min–Max: ${bot.label}`;
+    document.getElementById('range-enabled').checked = Boolean(bot.customJackpotRange);
+    document.getElementById('range-min').value = bot.config.MIN_JACKPOT;
+    document.getElementById('range-max').value = bot.config.MAX_JACKPOT;
+    document.getElementById('range-error').textContent = '';
+    toggleRangeFields();
+    document.getElementById('range-dialog').showModal();
+  }
+  document.getElementById('range-form').addEventListener('submit', async event => {
+    event.preventDefault();
+    const button = document.getElementById('range-save');
+    button.disabled = true;
+    try {
+      const response = await fetch(`/api/bots/${encodeURIComponent(rangeBotId)}/jackpot-range`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled: document.getElementById('range-enabled').checked,
+          minJackpot: Number(document.getElementById('range-min').value),
+          maxJackpot: Number(document.getElementById('range-max').value) }),
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || 'Không lưu được khoảng jackpot');
+      document.getElementById('range-dialog').close();
+      fetchBots();
+    } catch (error) { document.getElementById('range-error').textContent = error.message; }
+    finally { button.disabled = false; }
+  });
   let botsData = [];
+  function readQueueConfig() {
+    const queueEnabled = document.getElementById('cfg-queue').checked;
+    const maxConcurrent = Number(document.getElementById('cfg-concurrent').value);
+    const spinGap = Number(document.getElementById('cfg-spin-gap').value);
+    if (!Number.isInteger(maxConcurrent) || maxConcurrent < 1 || maxConcurrent > 1000
+      || !Number.isInteger(spinGap) || spinGap < 0 || spinGap > 60000) {
+      throw new Error('Số acc: 1-1000; khoảng cách spin: 0-60000 ms.');
+    }
+    return { queueEnabled, maxConcurrent, spinGap };
+  }
+  fetch('/api/config').then(response => response.json()).then(config => {
+    document.getElementById('cfg-min').value = config.minJackpot;
+    document.getElementById('cfg-max').value = config.maxJackpot;
+    document.getElementById('cfg-queue').checked = config.queueEnabled;
+    document.getElementById('cfg-concurrent').value = config.maxConcurrent;
+    document.getElementById('cfg-spin-gap').value = config.spinGap;
+  }).catch(() => {});
 
   function escapeHtml(value) {
     return String(value ?? "").replace(/[&<>'"]/g, ch => ({
@@ -301,12 +399,12 @@
         </div>
         <div style="display:flex;align-items:center;gap:6px">
           ${waitLabel}
-          <span class="bot-badge ${bot.running?'on':'off'}">${bot.running?'● Chạy':'○ Dừng'}</span>
+          <span class="bot-badge ${bot.running?'on':'off'}">${bot.queued?'Chờ hàng đợi':bot.starting?'Đang khởi động':bot.running?'● Chạy':'○ Dừng'}</span>
         </div>
       </div>
 
       <div style="font-size:0.65rem;color:#64748b;margin:-2px 0 6px;line-height:1.4">
-        🎯 Vùng bắn: <strong style="color:#a78bfa">${escapeHtml(bot.zoneLabel||'---')}</strong> · ${bot.config?bot.config.SPINS_PER_TURN:'?'} lần gọi/turn · spinNum=${bot.config?bot.config.SPIN_NUM:'?'}
+        🎯 Vùng bắn: <strong style="color:#a78bfa">${escapeHtml(bot.zoneLabel||'---')}</strong> · ${bot.config?bot.config.SPINS_PER_TURN:'?'} lần gọi/turn · API ${bot.config?bot.config.BASE_INTERVAL_MS:'?'}ms
       </div>
 
       <div class="bot-stats">
@@ -336,7 +434,11 @@
       <div class="bot-log">${escapeHtml(bot.lastLog||'...')}</div>
 
       <div class="bot-actions">
-        ${bot.running
+        <button class="btn btn-purple btn-sm" onclick="openJackpotRange('${bot.id}')">${bot.customJackpotRange ? '🎯 Min–Max riêng' : '🎯 Đặt Min–Max'}</button>
+        ${bot.firstSpinAvailable
+          ? `<button class="btn btn-purple btn-sm" onclick="firstSpinBot('${bot.id}')" ${bot.canFirstSpin?'':'disabled'}>${bot.firstSpinCompleted?'✓ Đã quay lần đầu':bot.firstSpinPending?'⏳ Đang quay':'🎲 Quay lần đầu'}</button>`
+          : ''}
+        ${bot.running || bot.queued || bot.starting
           ? `<button class="btn btn-red btn-sm" onclick="stopBot('${bot.id}')">⏹ Dừng</button>`
           : `<button class="btn btn-green btn-sm" onclick="startBot('${bot.id}')">▶ Chạy</button>`}
         <button class="btn btn-purple btn-sm" onclick="openLogs('${bot.id}')">📋 Logs</button>
@@ -387,28 +489,59 @@
 
   // ── Actions ──────────────────────────────────
   async function stopBot(id)   { await fetch(`/api/bots/${id}/stop`,{method:"POST"}); fetchBots(); }
-  async function startBot(id)  { await fetch(`/api/bots/${id}/start`,{method:"POST"}); fetchBots(); }
+  async function startBot(id)  {
+    const response = await fetch(`/api/bots/${id}/start`, { method: "POST" });
+    const result = await response.json();
+    if (!result.success) alert(result.error || "Bot chưa thể chạy");
+    fetchBots();
+  }
+  async function firstSpinBot(id) {
+    const bot = botsData.find(item => item.id === id);
+    if (!bot?.canFirstSpin) return;
+    bot.firstSpinPending = true;
+    bot.canFirstSpin = false;
+    scheduleRender();
+    try {
+      const response = await fetch(`/api/bots/${id}/first-spin`, { method: "POST" });
+      const result = await response.json();
+      if (!result.success) alert(result.error || "Quay lần đầu thất bại");
+    } catch (error) {
+      alert(`Quay lần đầu thất bại: ${error.message}`);
+    } finally {
+      fetchBots();
+    }
+  }
   async function stopAll()     { await fetch("/api/bots/stop-all",{method:"POST"}); fetchBots(); }
+  async function startAll() {
+    await fetch('/api/bots/start-all', { method: 'POST' });
+    fetchBots();
+  }
   async function deleteBot(id) {
     if (!confirm("Xóa bot này?")) return;
     await fetch(`/api/bots/${id}`,{method:"DELETE"}); fetchBots();
   }
   async function updateConfig() {
+    let queueConfig;
+    try { queueConfig = readQueueConfig(); } catch (error) { return alert(error.message); }
     const min = parseInt(document.getElementById("cfg-min").value);
     const max = parseInt(document.getElementById("cfg-max").value)||0;
-    const spt = parseInt(document.getElementById("cfg-spins").value);
+    const spt = Number(document.getElementById("cfg-spins").value);
+    const spinBurst = document.getElementById("cfg-burst").checked;
+    if (!Number.isInteger(spt) || spt < 1 || spt > 50) return alert("S\u1ed1 l\u1ea7n spam ph\u1ea3i l\u00e0 s\u1ed1 nguy\u00ean t\u1eeb 1 \u0111\u1ebfn 50!");
+    const baseInterval = parseInt(document.getElementById("cfg-api-interval").value);
     if (!min || min < 1) return alert("Min Jackpot không hợp lệ!");
     if (!spt || spt < 1) return alert("Spin / Turn không hợp lệ!");
+    if (!Number.isInteger(baseInterval) || baseInterval < 0 || baseInterval > 60000) return alert("Thời gian gọi API phải từ 0 đến 60000 ms!");
     if (max > 0 && max < min) return alert("Max Jackpot phải lớn hơn Min Jackpot!");
 
     const btn = document.getElementById("btn-apply");
     const old = btn.textContent;
     btn.disabled = true; btn.textContent = "⏳ Đang áp dụng...";
     try {
-      const res = await fetch("/api/config",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({minJackpot:min,maxJackpot:max,spinsPerTurn:spt})});
+      const res = await fetch("/api/config",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({minJackpot:min,maxJackpot:max,spinsPerTurn:spt,baseInterval,spinBurst,...queueConfig})});
       const data = await res.json();
       if (!res.ok || !data.success) throw new Error(data.error||"Lỗi không rõ");
-      btn.textContent = data.updated > 0 ? `✅ ${data.updated} bot` : "⚠️ Chưa có bot";
+      btn.textContent = data.updated > 0 ? `✅ ${data.updated} bot` : "Đã áp dụng";
       fetchBots();
     } catch(e) {
       btn.textContent = "❌ Lỗi";
@@ -434,6 +567,8 @@
   });
 
   async function loginAndRun() {
+    let queueConfig;
+    try { queueConfig = readQueueConfig(); } catch (error) { return alert(error.message); }
     const raw = document.getElementById("login-input").value.trim();
     if (!raw) return alert("Nhập username|password!");
     const accounts = raw.split("\n").filter(l=>l.trim()).map((line,i)=>{
@@ -445,13 +580,17 @@
 
     const min = parseInt(document.getElementById("cfg-min").value)||14000;
     const max = parseInt(document.getElementById("cfg-max").value)||0;
-    const spt = parseInt(document.getElementById("cfg-spins").value)||3;
+    const spt = Number(document.getElementById("cfg-spins").value);
+    const spinBurst = document.getElementById("cfg-burst").checked;
+    if (!Number.isInteger(spt) || spt < 1 || spt > 50) return alert("S\u1ed1 l\u1ea7n spam ph\u1ea3i l\u00e0 s\u1ed1 nguy\u00ean t\u1eeb 1 \u0111\u1ebfn 50!");
+    const baseInterval = parseInt(document.getElementById("cfg-api-interval").value);
     if (max > 0 && max < min) return alert("Max Jackpot phải lớn hơn Min Jackpot!");
+    if (!Number.isInteger(baseInterval) || baseInterval < 0 || baseInterval > 60000) return alert("Thời gian gọi API phải từ 0 đến 60000 ms!");
     const btn = document.getElementById("btn-login");
     btn.disabled=true; btn.textContent="⏳ Đang đăng nhập...";
 
     try {
-      const res = await fetch("/api/login-and-run",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({accounts,config:{minJackpot:min,maxJackpot:max,spinsPerTurn:spt}})});
+      const res = await fetch("/api/login-and-run",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({accounts,config:{minJackpot:min,maxJackpot:max,spinsPerTurn:spt,baseInterval,spinBurst,...queueConfig}})});
       const data = await res.json();
       if (data.success) {
         const failed = data.results.filter(r=>r.status==="failed");
@@ -484,7 +623,11 @@
   // ── SSE real-time ────────────────────────────
   const bustEvents = [];
   function addBust({ from, to, time, winner, prize, type = "grand" }) {
-    bustEvents.unshift({from,to,time,winner,prize,type});
+    const digits = String(prize ?? from ?? '').replace(/\D/g, '');
+    const key = winner && digits ? `${type}:${String(winner).trim().toLowerCase()}:${digits}` : null;
+    const receivedAt = Date.now();
+    if (key && bustEvents.some(event => event.key === key && receivedAt - event.receivedAt < 60000)) return;
+    bustEvents.unshift({from,to,time,winner,prize,type,key,receivedAt});
     if (bustEvents.length>5) bustEvents.pop();
     const html = bustEvents.map(e=>{
       const isMini = e.type === "mini";
@@ -509,26 +652,29 @@
       if (type === "init") {
         botsData = data.bots||[];
         const jp = data.jackpot||0;
-        if (jp>0) { document.getElementById("hd-jackpot").textContent=jp.toLocaleString(); botsData.forEach(b=>b.jackpot=jp); }
+        document.getElementById("hd-jackpot").textContent=jp>0?jp.toLocaleString():'---';
+        botsData.forEach(b=>b.jackpot=jp);
         scheduleRender();
       }
       else if (type === "jackpot") {
-        document.getElementById("hd-jackpot").textContent = data.value.toLocaleString();
+        document.getElementById("hd-jackpot").textContent = data.value>0?data.value.toLocaleString():'---';
         botsData.forEach(b=>{
           b.jackpot=data.value;
           const el=document.querySelector(`[data-bot-id="${b.id}"] .jackpot-value`);
-          if(el) el.innerHTML=`${data.value.toLocaleString()} <span style="font-size:0.6rem;font-weight:400">FC</span>`;
+          if(el) el.innerHTML=data.value>0
+            ? `${data.value.toLocaleString()} <span style="font-size:0.6rem;font-weight:400">FC</span>`
+            : '---';
         });
       }
       else if (type === "status") {
         const idx=botsData.findIndex(b=>b.id===data.id);
-        if(idx>=0){data.jackpot=botsData[idx].jackpot||data.jackpot;botsData[idx]=data;}else botsData.push(data);
+        if(idx>=0){botsData[idx]=data;}else botsData.push(data);
         scheduleRender();
       }
       else if (type === "snapshot") {
         (data.bots||[]).forEach(bot=>{
           const idx=botsData.findIndex(b=>b.id===bot.id);
-          if(idx>=0){bot.jackpot=botsData[idx].jackpot||bot.jackpot;botsData[idx]=bot;}else botsData.push(bot);
+          if(idx>=0){botsData[idx]=bot;}else botsData.push(bot);
         });
         scheduleRender();
       }
@@ -806,6 +952,18 @@
       console.error("[Record] Lỗi khởi tạo MediaRecorder:", err);
     }
   }
+</script>
+<script>
+  fetch("/api/event")
+    .then(response => {
+      if (!response.ok) throw new Error("Cannot load event");
+      return response.json();
+    })
+    .then(event => {
+      document.title = `${event.name} Multi-Bot`;
+      document.getElementById("event-heading").textContent = `${event.name} Bot`;
+    })
+    .catch(error => console.error(error));
 </script>
 </body>
 </html>

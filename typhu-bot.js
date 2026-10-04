@@ -1,4 +1,6 @@
 (() => {
+  // Standalone browser-console bot for typhu.fconline.garena.vn.
+  window.stopTyphuBot?.();
   const CONFIG = {
     MIN_JACKPOT: 13500,        // 🎯 [CẤU HÌNH] Đạt mốc FC này là bắt đầu xả đạn
     MAX_JACKPOT: 16500,        // 🎯 [CẤU HÌNH] Dừng quay khi hũ vượt mốc này
@@ -23,7 +25,7 @@
   let freeSpinFailStreak = 0;
 
   const stats = { clicks: 0, fcSpentEst: 0, fcSpentReal: 0, fullJackpot: 0, miniJackpot: 0 };
-  const log = (...a) => CONFIG.DEBUG && console.log("[BILAC]", ...a);
+  const log = (...a) => CONFIG.DEBUG && console.log("[TYPHU]", ...a);
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
   function detectMyUsername() {
@@ -239,8 +241,26 @@
     return span ? span.closest("a") : null;
   }
 
+  function selectPaidSpin() {
+    const wrap = document.querySelector('.spin__actions__voucher-spin');
+    const voucher = wrap?.querySelector('a.btn-voucher-spin');
+    const progress = wrap?.querySelector('.total-spin-used p')?.textContent.match(/(\d+)\s*\/\s*(\d+)/);
+    const used = voucher?.textContent.match(/Đã sử dụng\s*(\d+)\s*\/\s*(\d+)/i);
+    // Read direct text only: the nested span contains the crossed-out 190 price.
+    const priceText = [...(voucher?.querySelector('p')?.childNodes || [])]
+      .filter(node => node.nodeType === 3).map(node => node.textContent).join(' ');
+    const price = priceText.match(/(\d+)\s*FC\s*\//i);
+    if (voucher && buttonAvailable(voucher) && progress && Number(progress[2]) > 0
+      && Number(progress[1]) >= Number(progress[2]) && used && Number(used[1]) < Number(used[2])
+      && price && Number(price[1]) === 100) {
+      return { button: voucher, cost: 100, label: 'Voucher 100 FC / 10 lần' };
+    }
+    const button = findSpinButton();
+    return button ? { button, cost: CONFIG.FC_PER_CLICK, label: '190 FC / 10 lần' } : null;
+  }
+
   function buttonAvailable(el) {
-    return el && !el.matches('.disable, .disabled, [disabled], [aria-disabled="true"]')
+    return el && !el.matches('.locked, .disable, .disabled, [disabled], [aria-disabled="true"]')
       && getComputedStyle(el).pointerEvents !== 'none';
   }
 
@@ -255,17 +275,18 @@
 
   function clickSpin() {
     if (!running) return false;
+    const choice = selectPaidSpin();
+    if (!choice) { log('Chờ nút voucher hoặc nút 190 FC mở'); return false; }
+    const { button: btn, cost, label } = choice;
     const fc = getFcBalance();
-    if (fc == null || fc < CONFIG.FC_PER_CLICK) {
+    if (fc == null || fc < cost) {
       stop('Số dư FC không đủ hoặc chưa đọc được');
       return false;
     }
-    if (CONFIG.MAX_FC_TO_SPEND > 0 && stats.fcSpentEst + CONFIG.FC_PER_CLICK > CONFIG.MAX_FC_TO_SPEND) {
+    if (CONFIG.MAX_FC_TO_SPEND > 0 && stats.fcSpentEst + cost > CONFIG.MAX_FC_TO_SPEND) {
       stop('Chạm giới hạn chi tiêu');
       return false;
     }
-    const btn = findSpinButton();
-    if (!btn) { log("Không thấy nút quay 190FC"); return false; }
     if (!buttonAvailable(btn)) return false;
     const payment = document.querySelector('.spin__actions__payment-type');
     if (payment && ![...payment.querySelectorAll('a')].some(link =>
@@ -275,7 +296,8 @@
     }
     fireClick(btn);
     stats.clicks++;
-    stats.fcSpentEst += CONFIG.FC_PER_CLICK;
+    stats.fcSpentEst += cost;
+    log('Đã bấm:', label);
     return true;
   }
 
@@ -465,8 +487,8 @@
     }
   }
 
-  window.stopBilacBot = () => stop("dừng thủ công");
-  window.bilacStats = () => {
+  window.stopTyphuBot = () => stop("dừng thủ công");
+  window.typhuStats = () => {
     const realFc = getFcBalance();
     if (startFc != null && realFc != null) stats.fcSpentReal = startFc - realFc;
     const fcNet = (startFc != null && realFc != null) ? realFc - startFc : null;
@@ -480,6 +502,6 @@
   log(`Username: ${myName || "KHÔNG LẤY ĐƯỢC (điền tay MY_USERNAME)"}`);
   log(`FC hiện tại: ${startFc != null ? startFc : "KHÔNG ĐỌC ĐƯỢC"}`);
   log(`Spam từ ${CONFIG.MIN_JACKPOT} đến ${CONFIG.MAX_JACKPOT} | Dừng khi hũ nổ: ${CONFIG.STOP_ON_JACKPOT_RESET}`);
-  log("stopBilacBot() để dừng | bilacStats() để xem thống kê");
+  log("stopTyphuBot() để dừng | typhuStats() để xem thống kê");
   loop();
 })();
